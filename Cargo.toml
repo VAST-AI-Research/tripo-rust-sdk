@@ -36,3 +36,11 @@ path = "examples/image_to_model.rs"
 [[example]]
 name = "rig_and_animate"
 path = "examples/rig_and_animate.rs"
+
+[[example]]
+name = "text_to_image"
+path = "examples/text_to_image.rs"
+
+[[example]]
+name = "image_to_image"
+path = "examples/image_to_image.rs"
