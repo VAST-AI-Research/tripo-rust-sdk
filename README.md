@@ -2,7 +2,7 @@
 
 **English** · [简体中文](./README.zh-CN.md)
 
-An unofficial, async **Rust SDK** for the [Tripo3D v3 API](https://developers.tripo3d.com/zh/docs/introduction) — a full AI 3D generation platform covering text-to-3D, image-to-3D, multiview-to-3D, re-texturing, mesh editing, auto-rigging and animation retargeting.
+The official, async **Rust SDK** for the [Tripo3D v3 API](https://developers.tripo3d.ai/en/docs/introduction) — a full AI 3D generation platform covering text-to-3D, image-to-3D, multiview-to-3D, re-texturing, mesh editing, auto-rigging and animation retargeting.
 
 - Built on `tokio` + `reqwest` (rustls, no OpenSSL dependency).
 - Strongly-typed request/response models via `serde`.
@@ -11,7 +11,10 @@ An unofficial, async **Rust SDK** for the [Tripo3D v3 API](https://developers.tr
 - `wait_for_task` / `wait_for_task_with_progress` pollers.
 - Sibling SDK to [`tripo3d-sdk-js`](../tripo3d-sdk-js) and [`tripo3d-sdk-go`](../tripo3d-sdk-go) — same API surface, idiomatic per language.
 
-> Base URL: `https://openapi.tripo3d.com/v3` — this SDK targets the **v3** REST endpoints under `developers.tripo3d.com`, not the older `/v2/openapi/task` endpoint.
+> Base URL (global): `https://openapi.tripo3d.ai/v3`  
+> Base URL (China): `https://openapi.tripo3d.com/v3`  
+> This SDK targets the **v3** REST API, not the older `/v2/openapi/task` endpoint.  
+> Pass `base_url` to select your region (see [Client options](#client-options)).
 
 ---
 
@@ -34,7 +37,7 @@ If the repository is private, use the `ssh://` form (or configure Cargo's [`net.
 tripo3d-sdk = { git = "ssh://git@github.com/VAST-AI-Research/tripo-rust-sdk.git" }
 ```
 
-Create an API key on the [Tripo console](https://platform.tripo3d.ai/) and export it:
+Create an API key on the [Tripo console](https://platform.tripo3d.ai/) and export it (use [platform.tripo3d.com](https://platform.tripo3d.com/) in China):
 
 ```bash
 export TRIPO_API_KEY="tsk_..."
@@ -47,7 +50,11 @@ use tripo3d_sdk::{TripoClient, ClientOptions, WaitOptions, params::TextToModelPa
 
 #[tokio::main]
 async fn main() -> tripo3d_sdk::Result<()> {
-    let client = TripoClient::new(ClientOptions::default())?; // reads TRIPO_API_KEY
+    let client = TripoClient::new(ClientOptions {
+        // reads TRIPO_API_KEY
+        base_url: Some("https://openapi.tripo3d.ai/v3".into()), // use https://openapi.tripo3d.com/v3 in China
+        ..Default::default()
+    })?;
 
     let task_id = client
         .text_to_model(TextToModelParams {
@@ -80,7 +87,7 @@ async fn main() -> tripo3d_sdk::Result<()> {
 ```rust
 pub struct ClientOptions {
     pub api_key: Option<String>,      // defaults to TRIPO_API_KEY env var
-    pub base_url: Option<String>,     // default: https://openapi.tripo3d.com/v3
+    pub base_url: Option<String>,     // global: https://openapi.tripo3d.ai/v3 · China: https://openapi.tripo3d.com/v3
     pub timeout: Option<Duration>,    // per-request timeout, default 60s
     pub retries: Option<u32>,         // extra attempts on 5xx / network errors, default 2
     pub user_agent: Option<String>,
@@ -296,10 +303,12 @@ tests/           # wiremock-backed integration tests
 
 ## Reference
 
-- API reference (English): https://developers.tripo3d.com/en/docs/introduction
-- API reference (中文): https://developers.tripo3d.com/zh/docs/introduction
+- API docs: https://developers.tripo3d.ai/en/docs/introduction
 - Endpoint details: https://docs.tripo3d.ai/
+- Tripo console: https://platform.tripo3d.ai/
+- API base URL (global): `https://openapi.tripo3d.ai/v3`
+- API base URL (China): `https://openapi.tripo3d.com/v3`
 
 ## License
 
-MIT — see `LICENSE`. Not affiliated with, or endorsed by, VAST AI / Tripo3D.
+MIT — see `LICENSE`.

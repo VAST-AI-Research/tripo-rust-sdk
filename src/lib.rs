@@ -1,4 +1,7 @@
-//! `tripo3d-sdk` — an unofficial Rust SDK for the [Tripo3D v3 API](https://developers.tripo3d.com/en/docs/introduction).
+//! `tripo3d-sdk` — the official Rust SDK for the [Tripo3D v3 API](https://developers.tripo3d.ai/en/docs/introduction).
+//!
+//! Global API base URL: `https://openapi.tripo3d.ai/v3`  
+//! China API base URL: `https://openapi.tripo3d.com/v3`
 //!
 //! ```no_run
 //! use tripo3d_sdk::{TripoClient, ClientOptions, params::TextToModelParams};

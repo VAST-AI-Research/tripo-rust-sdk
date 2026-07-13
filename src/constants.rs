@@ -7,7 +7,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Default REST endpoint for the Tripo3D v3 openapi service.
+/// Default REST endpoint (China mainland). Overseas / global:
+/// `https://openapi.tripo3d.ai/v3`.
 pub const DEFAULT_BASE_URL: &str = "https://openapi.tripo3d.com/v3";
 
 /// Task lifecycle statuses returned by `GET /v3/tasks/{task_id}`.

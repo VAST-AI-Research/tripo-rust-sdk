@@ -2,7 +2,7 @@
 
 [English](./README.md) · **简体中文**
 
-一个非官方的异步 **Rust SDK**，用于访问 [Tripo3D v3 API](https://developers.tripo3d.com/zh/docs/introduction) —— 覆盖 AI 3D 生成的完整能力：文生 3D、图生 3D、多视角生 3D、重贴图、网格编辑、自动绑骨与动画重定向。
+Tripo 官方异步 **Rust SDK**，用于访问 [Tripo3D v3 API](https://developers.tripo3d.com/zh/docs/introduction) —— 覆盖 AI 3D 生成的完整能力：文生 3D、图生 3D、多视角生 3D、重贴图、网格编辑、自动绑骨与动画重定向。
 
 - 基于 `tokio` + `reqwest`（使用 rustls，无需 OpenSSL）。
 - 通过 `serde` 提供强类型的请求 / 响应模型。
@@ -11,7 +11,10 @@
 - `wait_for_task` / `wait_for_task_with_progress` 轮询器。
 - 与 [`tripo3d-sdk-js`](../tripo3d-sdk-js)、[`tripo3d-sdk-go`](../tripo3d-sdk-go) 是同源姊妹 SDK —— API 能力一致，各自遵循语言惯例。
 
-> Base URL：`https://openapi.tripo3d.com/v3` —— 本 SDK 面向 **v3** REST 接口，**不是**旧的 `/v2/openapi/task` 接口。
+> 国内 Base URL：`https://openapi.tripo3d.com/v3`  
+> 海外 Base URL：`https://openapi.tripo3d.ai/v3`  
+> 本 SDK 面向 **v3** REST 接口，**不是**旧的 `/v2/openapi/task` 接口。  
+> 可通过 `base_url` 选择区域（见[客户端参数](#客户端参数)）。
 
 ---
 
@@ -34,7 +37,7 @@ tokio = { version = "1", features = ["full"] }
 tripo3d-sdk = { git = "ssh://git@github.com/VAST-AI-Research/tripo-rust-sdk.git" }
 ```
 
-先在 [Tripo 控制台](https://platform.tripo3d.ai/) 创建 API Key 并导出：
+先在 [Tripo 控制台](https://platform.tripo3d.com/) 创建 API Key 并导出（海外请使用 [platform.tripo3d.ai](https://platform.tripo3d.ai/)）：
 
 ```bash
 export TRIPO_API_KEY="tsk_..."
@@ -80,7 +83,7 @@ async fn main() -> tripo3d_sdk::Result<()> {
 ```rust
 pub struct ClientOptions {
     pub api_key: Option<String>,      // 默认读取 TRIPO_API_KEY 环境变量
-    pub base_url: Option<String>,     // 默认：https://openapi.tripo3d.com/v3
+    pub base_url: Option<String>,     // 国内：https://openapi.tripo3d.com/v3 · 海外：https://openapi.tripo3d.ai/v3
     pub timeout: Option<Duration>,    // 单次请求超时，默认 60 秒
     pub retries: Option<u32>,         // 5xx / 网络错误的额外重试次数，默认 2
     pub user_agent: Option<String>,
@@ -312,10 +315,12 @@ tests/           # 基于 wiremock 的集成测试
 
 ## 相关链接
 
-- API 文档（英文）：https://developers.tripo3d.com/en/docs/introduction
-- API 文档（中文）：https://developers.tripo3d.com/zh/docs/introduction
-- 每个端点参数细节：https://docs.tripo3d.ai/
+- API 文档：https://developers.tripo3d.com/zh/docs/introduction
+- 每个端点参数细节：https://docs.tripo3d.com/
+- Tripo 控制台：https://platform.tripo3d.com/
+- API 端点（国内）：`https://openapi.tripo3d.com/v3`
+- API 端点（海外）：`https://openapi.tripo3d.ai/v3`
 
 ## 许可协议
 
-MIT —— 见 `LICENSE`。本项目与 VAST AI / Tripo3D 官方无隶属关系。
+MIT —— 见 `LICENSE`。
