@@ -6,7 +6,7 @@ rust-version = "1.75"
 description = "Unofficial Rust SDK for the Tripo3D v3 AI 3D generation API (openapi.tripo3d.com/v3)."
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/vast-enterprise/tripo-rust-sdk"
+repository = "https://github.com/VAST-AI-Research/tripo-rust-sdk"
 keywords = ["tripo3d", "tripo", "3d", "ai", "sdk"]
 categories = ["api-bindings", "graphics"]
 

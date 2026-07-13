@@ -21,7 +21,7 @@ This crate is not published to crates.io yet. Add it as a git or path dependency
 
 ```toml
 [dependencies]
-tripo3d-sdk = { git = "https://github.com/vast-enterprise/tripo-rust-sdk.git" }
+tripo3d-sdk = { git = "https://github.com/VAST-AI-Research/tripo-rust-sdk.git" }
 # or, for local development against a working copy of this repo:
 tripo3d-sdk = { path = "../tripo3d-sdk-rust" }
 
@@ -31,7 +31,7 @@ tokio = { version = "1", features = ["full"] }
 If the repository is private, use the `ssh://` form (or configure Cargo's [`net.git-fetch-with-cli`](https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli) to reuse your existing SSH key):
 
 ```toml
-tripo3d-sdk = { git = "ssh://git@github.com/vast-enterprise/tripo-rust-sdk.git" }
+tripo3d-sdk = { git = "ssh://git@github.com/VAST-AI-Research/tripo-rust-sdk.git" }
 ```
 
 Create an API key on the [Tripo console](https://platform.tripo3d.ai/) and export it:
