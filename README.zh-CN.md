@@ -20,21 +20,18 @@ Tripo 官方异步 **Rust SDK**，用于访问 [Tripo3D v3 API](https://develope
 
 ## 安装
 
-本 crate 尚未发布到 crates.io，请以 git 依赖或路径依赖的方式引入：
+```toml
+[dependencies]
+tripo3d-sdk = "0.1"
+tokio = { version = "1", features = ["full"] }
+```
+
+基于 git / 本地路径进行开发调试时也可以这样写：
 
 ```toml
 [dependencies]
 tripo3d-sdk = { git = "https://github.com/VAST-AI-Research/tripo-rust-sdk.git" }
-# 或者，基于本地代码进行开发调试：
-tripo3d-sdk = { path = "../tripo3d-sdk-rust" }
-
-tokio = { version = "1", features = ["full"] }
-```
-
-如果仓库是私有的，可以使用 `ssh://` 形式（或配置 Cargo 的 [`net.git-fetch-with-cli`](https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli) 来复用你本机已有的 SSH key）：
-
-```toml
-tripo3d-sdk = { git = "ssh://git@github.com/VAST-AI-Research/tripo-rust-sdk.git" }
+# tripo3d-sdk = { path = "../tripo3d-sdk-rust" }
 ```
 
 先在 [Tripo 控制台](https://platform.tripo3d.com/) 创建 API Key 并导出（海外请使用 [platform.tripo3d.ai](https://platform.tripo3d.ai/)）：
