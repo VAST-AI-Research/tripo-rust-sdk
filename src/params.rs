@@ -15,7 +15,7 @@
 //! Unknown/forward-compatible fields can be passed via `extra`, which is
 //! flattened into the JSON payload alongside the typed fields.
 
-use crate::models::FileDescriptor;
+use crate::models::{FileDescriptor, FileInput, MultiviewPrompt, MultiviewTaskRef};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -55,6 +55,10 @@ pub struct TextToModelParams {
     pub compress: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_uv: Option<bool>,
+    /// Forward axis of the exported model; see the
+    /// [`export_orientation`](crate::constants::export_orientation) constants.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export_orientation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
     #[serde(flatten)]
@@ -73,7 +77,9 @@ impl TextToModelParams {
 /// `POST /v3/generation/image-to-model`
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ImageToModelParams {
-    pub file: FileDescriptor,
+    /// The source image: a public URL, a `file_token`, or the `task_id` of
+    /// an earlier text-to-image or image-to-image task.
+    pub input: FileInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -108,6 +114,10 @@ pub struct ImageToModelParams {
     pub compress: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_uv: Option<bool>,
+    /// Forward axis of the exported model; see the
+    /// [`export_orientation`](crate::constants::export_orientation) constants.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export_orientation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
     #[serde(flatten)]
@@ -115,26 +125,35 @@ pub struct ImageToModelParams {
 }
 
 impl ImageToModelParams {
-    pub fn new(file: impl Into<crate::models::FileInput>) -> Self {
+    pub fn new(input: impl Into<FileInput>) -> Self {
         Self {
-            file: file.into().into_descriptor(),
+            input: input.into(),
             ..Default::default()
         }
     }
 }
 
+/// The `inputs` payload of `POST /v3/generation/multiview-to-model`.
+// The variants differ in size because `Views` holds four descriptors; boxing
+// would penalise the common path to shrink a value built once per request.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum MultiviewInputs {
+    /// Exactly 4 views in `[front, left, back, right]` order. The front view
+    /// is mandatory and at least 2 views must be supplied; use
+    /// [`FileInput::Empty`] to skip the others.
+    Views([FileInput; 4]),
+    /// Reuses the 4-view output of a successful image-to-multiview or
+    /// edit-multiview task.
+    TaskId([MultiviewTaskRef; 1]),
+}
+
 /// `POST /v3/generation/multiview-to-model`
-///
-/// `files`, when set, must contain exactly 4 items in
-/// `[front, left, back, right]` order. Individual items may be `None`
-/// (empty descriptor) except the front view. Mutually exclusive with
-/// `original_task_id`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MultiviewToModelParams {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub files: Option<[FileDescriptor; 4]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub original_task_id: Option<String>,
+    pub inputs: Option<MultiviewInputs>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -147,6 +166,8 @@ pub struct MultiviewToModelParams {
     pub pbr: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub texture_quality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_quality: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub texture_alignment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,49 +184,84 @@ pub struct MultiviewToModelParams {
     pub generate_parts: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compress: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export_uv: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export_orientation: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl MultiviewToModelParams {
-    /// `files` in `[front, left, back, right]` order — use `None` for
-    /// omitted non-front views.
+    /// Views in `[front, left, back, right]` order — use `None` for the
+    /// views you want to skip.
     ///
     /// ```
     /// use tripo3d_sdk::{models::FileInput, params::MultiviewToModelParams};
     ///
-    /// let params = MultiviewToModelParams::from_files([
+    /// let params = MultiviewToModelParams::from_views([
     ///     Some(FileInput::from("https://example.com/front.png")),
     ///     None,
     ///     Some(FileInput::from("https://example.com/back.png")),
     ///     None,
     /// ]);
     /// ```
-    pub fn from_files(files: [Option<crate::models::FileInput>; 4]) -> Self {
-        let files = files.map(|f| {
-            f.map(crate::models::FileInput::into_descriptor)
-                .unwrap_or_default()
-        });
+    pub fn from_views(views: [Option<FileInput>; 4]) -> Self {
         Self {
-            files: Some(files),
+            inputs: Some(MultiviewInputs::Views(
+                views.map(|v| v.unwrap_or(FileInput::Empty)),
+            )),
             ..Default::default()
         }
     }
 
-    pub fn from_original_task_id(task_id: impl Into<String>) -> Self {
+    /// Reuses the 4-view output of an earlier image-to-multiview or
+    /// edit-multiview task.
+    pub fn from_task_id(task_id: impl Into<String>) -> Self {
         Self {
-            original_task_id: Some(task_id.into()),
+            inputs: Some(MultiviewInputs::TaskId([MultiviewTaskRef {
+                task_id: task_id.into(),
+            }])),
             ..Default::default()
         }
     }
 }
 
 /// `POST /v3/generation/text-to-image`
+///
+/// Several fields are only honoured by a subset of the
+/// [`image_model`](crate::constants::image_model) values; see the constant
+/// documentation for `quality`, `background` and `aspect_ratio`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TextToImageParams {
+    /// Required unless `template` is set. Chinese and English are both
+    /// supported; put the most important elements first and append a
+    /// negative prompt after `--no`.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Either a resolution tier such as `"2K"` or exact pixels such as
+    /// `"2048x2048"`. The accepted values differ per model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
+    /// Adds an AI-generated-content watermark. Only the seedream models
+    /// honour it: the banana models always embed an invisible watermark
+    /// that cannot be disabled, and chat_image has no watermark control.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<bool>,
+    /// Applies a generation preset and makes `prompt` optional; see the
+    /// [`image_template`](crate::constants::image_template) constants.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -217,35 +273,129 @@ impl TextToImageParams {
             ..Default::default()
         }
     }
+
+    /// Builds a prompt-less request driven entirely by a template.
+    pub fn from_template(template: impl Into<String>) -> Self {
+        Self {
+            template: Some(template.into()),
+            ..Default::default()
+        }
+    }
 }
 
-/// `POST /v3/generation/image-to-image`
+/// `POST /v3/generation/image-to-image` — edit, style transfer, or
+/// multi-image fusion.
+///
+/// Several fields are only honoured by a subset of the
+/// [`image_model`](crate::constants::image_model) values; see the constant
+/// documentation for `quality`, `background` and `aspect_ratio`. Note that
+/// `seedream_v5` is the only seedream model this endpoint accepts —
+/// `seedream_v4` is text-to-image only.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ImageToImageParams {
+    /// A single reference image. Mutually exclusive with `inputs`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<FileDescriptor>,
+    pub input: Option<FileInput>,
+    /// Multiple reference images, referenced from `prompt` as `image[1]`,
+    /// `image[2]` and so on. The ceiling depends on the model: 4 for
+    /// seedream, 10 for banana, 16 for chat_image. Mutually exclusive with
+    /// `input`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Vec<FileInput>>,
+    /// The edit instruction. Required unless `template` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Either a resolution tier such as `"2K"` or exact pixels such as
+    /// `"2048x2048"`. The accepted values differ per model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
+    /// Applies an edit preset and makes `prompt` optional; see the
+    /// [`image_template`](crate::constants::image_template) constants.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl ImageToImageParams {
+    /// A single reference image plus an edit instruction.
+    pub fn new(input: impl Into<FileInput>, prompt: impl Into<String>) -> Self {
+        Self {
+            input: Some(input.into()),
+            prompt: Some(prompt.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Several reference images, addressed from the prompt as `image[1]`,
+    /// `image[2]` and so on.
+    pub fn from_inputs(
+        inputs: impl IntoIterator<Item = FileInput>,
+        prompt: impl Into<String>,
+    ) -> Self {
+        Self {
+            inputs: Some(inputs.into_iter().collect()),
+            prompt: Some(prompt.into()),
+            ..Default::default()
+        }
+    }
 }
 
 /// `POST /v3/generation/image-to-multiview`
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ImageToMultiviewParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<FileDescriptor>,
+    /// The source image: a public URL, a `file_token`, or the `task_id` of
+    /// an earlier image generation task.
+    pub input: FileInput,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-/// `POST /v3/generation/edit-multiview`
+impl ImageToMultiviewParams {
+    pub fn new(input: impl Into<FileInput>) -> Self {
+        Self {
+            input: input.into(),
+            ..Default::default()
+        }
+    }
+}
+
+/// `POST /v3/generation/edit-multiview` — apply per-view edits to a
+/// previously generated multiview set.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct EditMultiviewParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub original_task_id: Option<String>,
+    /// The `task_id` of an earlier successful image-to-multiview or
+    /// edit-multiview task. The API documents `file_token` and URL inputs
+    /// too, but the service currently rejects anything that is not a
+    /// `task_id`.
+    pub input: FileInput,
+    /// 1 to 4 per-view edit instructions.
+    pub prompts: Vec<MultiviewPrompt>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl EditMultiviewParams {
+    pub fn new(
+        task_id: impl Into<String>,
+        prompts: impl IntoIterator<Item = MultiviewPrompt>,
+    ) -> Self {
+        Self {
+            input: FileInput::Ref(task_id.into()),
+            prompts: prompts.into_iter().collect(),
+            ..Default::default()
+        }
+    }
 }
 
 /// `POST /v3/models/texture`

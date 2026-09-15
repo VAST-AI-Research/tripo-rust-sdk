@@ -18,7 +18,7 @@
 
 use crate::error::{Error, Result};
 use crate::http::{HttpClient, HttpConfig, RequestOptions};
-use crate::models::{Balance, FileDescriptor, Task, TaskCreated, TaskList, UploadedFile};
+use crate::models::{Balance, Task, TaskCreated, TaskList, UploadedFile};
 use crate::params::*;
 use reqwest::Method;
 use serde::Serialize;
@@ -224,9 +224,9 @@ impl TripoClient {
 
     /// `POST /v3/generation/image-to-model`
     pub async fn image_to_model(&self, params: ImageToModelParams) -> Result<String> {
-        if is_empty_file(&params.file) {
+        if params.input.is_empty() {
             return Err(Error::invalid_argument(
-                "image_to_model: `file` is required (url, file_token, or object)",
+                "image_to_model: `input` is required (url, file_token, or task_id)",
             ));
         }
         self.create_task("/generation/image-to-model", &params)
@@ -235,14 +235,29 @@ impl TripoClient {
 
     /// `POST /v3/generation/multiview-to-model`
     ///
-    /// `params.files`, when set, is a fixed `[front, left, back, right]`
-    /// array — the type system guarantees the length, so only the
-    /// "provide one of `files`/`original_task_id`" invariant is checked here.
+    /// The positional form is a fixed `[front, left, back, right]` array, so
+    /// the type system guarantees its length; what is checked here is that a
+    /// front view is present and at least 2 views are supplied.
     pub async fn multiview_to_model(&self, params: MultiviewToModelParams) -> Result<String> {
-        if params.files.is_none() && params.original_task_id.is_none() {
-            return Err(Error::invalid_argument(
-                "multiview_to_model: provide `files` ([front, left, back, right]) or `original_task_id`",
-            ));
+        match &params.inputs {
+            None => {
+                return Err(Error::invalid_argument(
+                    "multiview_to_model: provide `inputs` ([front, left, back, right]) or a source task_id",
+                ))
+            }
+            Some(MultiviewInputs::Views(views)) => {
+                if views[0].is_empty() {
+                    return Err(Error::invalid_argument(
+                        "multiview_to_model: the front view (`inputs[0]`) is required",
+                    ));
+                }
+                if views.iter().filter(|v| !v.is_empty()).count() < 2 {
+                    return Err(Error::invalid_argument(
+                        "multiview_to_model: at least 2 views are required",
+                    ));
+                }
+            }
+            Some(MultiviewInputs::TaskId(_)) => {}
         }
         self.create_task("/generation/multiview-to-model", &params)
             .await
@@ -252,9 +267,9 @@ impl TripoClient {
 
     /// `POST /v3/generation/text-to-image`
     pub async fn text_to_image(&self, params: TextToImageParams) -> Result<String> {
-        if params.prompt.trim().is_empty() {
+        if params.prompt.trim().is_empty() && params.template.is_none() {
             return Err(Error::invalid_argument(
-                "text_to_image: `prompt` is required",
+                "text_to_image: `prompt` is required unless `template` is set",
             ));
         }
         self.create_task("/generation/text-to-image", &params).await
@@ -262,18 +277,49 @@ impl TripoClient {
 
     /// `POST /v3/generation/image-to-image`
     pub async fn image_to_image(&self, params: ImageToImageParams) -> Result<String> {
+        let has_inputs = params.inputs.as_ref().is_some_and(|v| !v.is_empty());
+        if params.input.is_none() && !has_inputs {
+            return Err(Error::invalid_argument(
+                "image_to_image: `input` or `inputs` is required",
+            ));
+        }
+        if params.input.is_some() && has_inputs {
+            return Err(Error::invalid_argument(
+                "image_to_image: `input` and `inputs` are mutually exclusive",
+            ));
+        }
+        if params.prompt.is_none() && params.template.is_none() {
+            return Err(Error::invalid_argument(
+                "image_to_image: `prompt` is required unless `template` is set",
+            ));
+        }
         self.create_task("/generation/image-to-image", &params)
             .await
     }
 
     /// `POST /v3/generation/image-to-multiview`
     pub async fn image_to_multiview(&self, params: ImageToMultiviewParams) -> Result<String> {
+        if params.input.is_empty() {
+            return Err(Error::invalid_argument(
+                "image_to_multiview: `input` is required (url, file_token, or task_id)",
+            ));
+        }
         self.create_task("/generation/image-to-multiview", &params)
             .await
     }
 
     /// `POST /v3/generation/edit-multiview`
     pub async fn edit_multiview(&self, params: EditMultiviewParams) -> Result<String> {
+        if params.input.is_empty() {
+            return Err(Error::invalid_argument(
+                "edit_multiview: `input` is required (the task_id of a multiview task)",
+            ));
+        }
+        if params.prompts.is_empty() || params.prompts.len() > 4 {
+            return Err(Error::invalid_argument(
+                "edit_multiview: `prompts` must contain 1 to 4 items",
+            ));
+        }
         self.create_task("/generation/edit-multiview", &params)
             .await
     }
@@ -411,10 +457,6 @@ impl TripoClient {
             .await?;
         Ok(created.task_id)
     }
-}
-
-fn is_empty_file(file: &FileDescriptor) -> bool {
-    file.file_token.is_none() && file.url.is_none() && file.object.is_none()
 }
 
 /// Minimal path-segment percent-encoding (avoids pulling in the `urlencoding`

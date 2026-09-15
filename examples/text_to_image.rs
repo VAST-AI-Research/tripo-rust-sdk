@@ -8,14 +8,13 @@
 
 use std::env;
 use tokio::fs;
-use tripo3d_sdk::{constants::TaskStatus, params::TextToImageParams, ClientOptions, TripoClient, WaitOptions};
+use tripo3d_sdk::{
+    constants::TaskStatus, params::TextToImageParams, ClientOptions, TripoClient, WaitOptions,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let prompt = env::args()
-        .skip(1)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let prompt = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let prompt = if prompt.is_empty() {
         "a cute red panda holding bamboo, studio lighting".to_string()
     } else {

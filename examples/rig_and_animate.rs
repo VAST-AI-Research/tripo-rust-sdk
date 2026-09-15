@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     // 1. Generate a base 3D model — the P1 line has clean, low-poly topology.
     let model_task_id = client
         .image_to_model(ImageToModelParams {
-            model: Some(model_version::P1.to_string()),
+            model: Some(model_version::P2.to_string()),
             face_limit: Some(5000),
             texture: Some(true),
             ..ImageToModelParams::new(image_url)

@@ -35,7 +35,7 @@ pub enum Error {
 
     /// A task reached a non-successful terminal state
     /// (`failed` / `cancelled` / `banned` / `expired`).
-    #[error("task {} ended with status \"{}\"{}", task.task_id, task.status, task.error_msg.as_deref().map(|m| format!(": {m}")).unwrap_or_default())]
+    #[error("task {} ended with status \"{}\"{}", task.task_id, task.status, task.error_message.as_deref().map(|m| format!(": {m}")).unwrap_or_default())]
     Task { task: Box<Task> },
 
     /// `wait_for_task` exceeded the caller-supplied timeout.

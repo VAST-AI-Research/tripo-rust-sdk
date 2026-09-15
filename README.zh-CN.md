@@ -139,13 +139,14 @@ pub struct ClientOptions {
 
 ## 传入图片 / 文件
 
-任何接受图片的字段都使用 [`FileInput`]，可以从 `&str` / `String` / `FileDescriptor` 转换：
+所有接收图片或模型的接口都通过 [`FileInput`] 传入。裸字符串会原样透传，由服务端推断它是什么 —— 公开 URL、`file_token`，或是需要复用其产物的上游任务 `task_id`。如果不想依赖推断，可以用显式变体：
 
 ```rust
 use tripo3d_sdk::{FileInput, FileDescriptor, ObjectRef};
 
-let a: FileInput = "https://example.com/hero.png".into();   // 绝对 URL
-let b: FileInput = "8f2a4c...".into();                       // 已上传的 file_token
+let a: FileInput = "https://example.com/hero.png".into();   // 公开 URL
+let b: FileInput = "8f2a4c...".into();                       // file_token
+let e: FileInput = previous_task_id.as_str().into();         // 复用上游任务的产物
 let c: FileInput = FileDescriptor { url: Some("https://example.com/a.png".into()), ..Default::default() }.into();
 let d: FileInput = FileDescriptor {
     object: Some(ObjectRef { bucket: "tripo-data".into(), key: "uploads/abc.png".into() }),
@@ -164,6 +165,28 @@ let task_id = client
     .await?;
 ```
 
+任务串联无需下载再上传，直接把上游 `task_id` 传进去即可：
+
+```rust
+use tripo3d_sdk::constants::{image_model, model_version};
+use tripo3d_sdk::params::{ImageToModelParams, TextToImageParams};
+
+let image_id = client
+    .text_to_image(TextToImageParams {
+        model: Some(image_model::SEEDREAM_V5.to_string()),
+        ..TextToImageParams::new("一个低面数木质藏宝箱")
+    })
+    .await?;
+client.wait_for_task(&image_id, WaitOptions::default()).await?;
+
+let model_id = client
+    .image_to_model(ImageToModelParams {
+        model: Some(model_version::P2.to_string()),
+        ..ImageToModelParams::new(image_id.as_str())
+    })
+    .await?;
+```
+
 ---
 
 ## 端到端流水线：游戏就绪角色
@@ -177,10 +200,10 @@ use tripo3d_sdk::{
 
 let client = TripoClient::new(ClientOptions::default())?;
 
-// 1. 图生 3D（P1 系列低面拓扑，游戏/移动端友好）
+// 1. 图生 3D（P 系列低面拓扑，游戏/移动端友好）
 let model_id = client
     .image_to_model(ImageToModelParams {
-        model: Some(model_version::P1.to_string()),
+        model: Some(model_version::P2.to_string()),
         face_limit: Some(5000),
         texture: Some(true),
         ..ImageToModelParams::new("https://example.com/hero.png")
@@ -236,7 +259,7 @@ match client.text_to_model(params).await {
         eprintln!("API 错误 {code}：{message:?} — {suggestion:?}");
     }
     Err(Error::Task { task }) => {
-        eprintln!("任务 {} 失败：{:?}", task.task_id, task.error_msg);
+        eprintln!("任务 {} 失败：{:?}", task.task_id, task.error_message);
     }
     Err(Error::Timeout { task_id, timeout_ms }) => {
         eprintln!("任务 {task_id} 在 {timeout_ms}ms 内未完成");
@@ -263,16 +286,49 @@ match client.text_to_model(params).await {
 ## 常量枚举
 
 ```rust
-use tripo3d_sdk::{TaskStatus, Animation, RigType, RigSpec, constants::model_version, OutputFormat};
+use tripo3d_sdk::{TaskStatus, Animation, RigType, RigSpec, OutputFormat};
+use tripo3d_sdk::constants::{image_model, model_version};
 
 TaskStatus::Success;
 Animation::Walk.as_str();          // "preset:walk"
 RigType::Biped;                    // 序列化为 "biped"
 RigSpec::Mixamo;                   // 序列化为 "mixamo"
 model_version::H3_1;               // "v3.1-20260211"
-model_version::P1;                 // "P1-20260311"
+model_version::P2;                 // "P2-20260801"
+image_model::SEEDREAM_V5;          // "seedream_v5"
+image_model::CHAT_IMAGE_2_5_SUNBURST; // "chat_image_2.5_sunburst"
 OutputFormat::Fbx;                 // 序列化为 "FBX"
 ```
+
+### 3D 生成模型
+
+| 常量 | 取值 | 说明 |
+| --- | --- | --- |
+| `model_version::H3_1` | `v3.1-20260211` | 最新，质量最佳（默认） |
+| `model_version::H3_0` | `v3.0-20250812` | 稳定版，支持高级特性 |
+| `model_version::H2_5` | `v2.5-20250123` | 旧版本，不支持 `geometry_quality` |
+| `model_version::P1` | `P1-20260311` | 低面数，干净拓扑 |
+| `model_version::P2` | `P2-20260801` | 新一代 P 系列，支持四边面输出。preview 版 |
+
+P 系列中只有 `model_version::P2` 支持 `quad`，传给 `P1` 会返回 `400`。P1 同样不支持 `smart_low_poly`、`generate_parts` 和 `geometry_quality`。
+
+### 生图模型
+
+用于 `text_to_image` 与 `image_to_image`。
+
+| 常量 | 取值 | 说明 |
+| --- | --- | --- |
+| `image_model::SEEDREAM_V5` | `seedream_v5` | 最强编辑、风格迁移与多图融合 |
+| `image_model::BANANA` | `banana` | 快速 |
+| `image_model::BANANA_PRO` | `banana_pro` | 更高质量 |
+| `image_model::BANANA2` | `banana2` | 最新快速选项 |
+| `image_model::CHAT_IMAGE_2` | `chat_image_2` | 质量最佳 |
+| `image_model::CHAT_IMAGE_2_5_FLARE` | `chat_image_2.5_flare` | 2.5 系列速度档 |
+| `image_model::CHAT_IMAGE_2_5_SUNBURST` | `chat_image_2.5_sunburst` | 2.5 系列精修档 |
+
+部分参数是分模型的：`quality` 仅 `chat_image_2` 和两个 2.5 模型支持（其它模型传入会直接报错），`background` 仅两个 2.5 模型支持，`aspect_ratio` 仅 banana 系列支持 —— seedream 和 chat_image 请改用 `size` 控制出图尺寸。
+
+`chat_image_1` 与 `chat_image_1.5` 已被有意移除：它们将分别于 2026-10-23 和 2026-12-01 下线。迁移期间如果仍需使用，可直接传字符串字面量。
 
 ---
 

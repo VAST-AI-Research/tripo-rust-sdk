@@ -143,13 +143,14 @@ Every generation method returns a `task_id` (`String`). Use `wait_for_task()` / 
 
 ## Passing images / files
 
-Any method that accepts an image (`file`, `image_prompt`, `style_image`, …) takes a [`FileInput`], which is `From<&str>` / `From<String>` / `From<FileDescriptor>`:
+Every endpoint that takes an image or model accepts it as a [`FileInput`]. A bare string is forwarded untouched so the server can infer what it is — a public URL, a `file_token`, or the `task_id` of an earlier task whose output should be reused. Use the explicit variants when you would rather not rely on inference:
 
 ```rust
 use tripo3d_sdk::{FileInput, FileDescriptor, ObjectRef};
 
-let a: FileInput = "https://example.com/hero.png".into();   // absolute URL
-let b: FileInput = "8f2a4c...".into();                       // bare file_token
+let a: FileInput = "https://example.com/hero.png".into();   // a public URL
+let b: FileInput = "8f2a4c...".into();                       // a file_token
+let e: FileInput = previous_task_id.as_str().into();         // reuse a task's output
 let c: FileInput = FileDescriptor { url: Some("https://example.com/a.png".into()), ..Default::default() }.into();
 let d: FileInput = FileDescriptor {
     object: Some(ObjectRef { bucket: "tripo-data".into(), key: "uploads/abc.png".into() }),
@@ -168,6 +169,29 @@ let task_id = client
     .await?;
 ```
 
+Chaining tasks needs no download-and-reupload round trip — pass the upstream
+`task_id` straight in:
+
+```rust
+use tripo3d_sdk::constants::{image_model, model_version};
+use tripo3d_sdk::params::{ImageToModelParams, TextToImageParams};
+
+let image_id = client
+    .text_to_image(TextToImageParams {
+        model: Some(image_model::SEEDREAM_V5.to_string()),
+        ..TextToImageParams::new("a low-poly wooden treasure chest")
+    })
+    .await?;
+client.wait_for_task(&image_id, WaitOptions::default()).await?;
+
+let model_id = client
+    .image_to_model(ImageToModelParams {
+        model: Some(model_version::P2.to_string()),
+        ..ImageToModelParams::new(image_id.as_str())
+    })
+    .await?;
+```
+
 ---
 
 ## End-to-end pipeline: game-ready character
@@ -181,10 +205,10 @@ use tripo3d_sdk::{
 
 let client = TripoClient::new(ClientOptions::default())?;
 
-// 1. Image -> 3D (low-poly P1 topology, mobile/game friendly)
+// 1. Image -> 3D (low-poly P series topology, mobile/game friendly)
 let model_id = client
     .image_to_model(ImageToModelParams {
-        model: Some(model_version::P1.to_string()),
+        model: Some(model_version::P2.to_string()),
         face_limit: Some(5000),
         texture: Some(true),
         ..ImageToModelParams::new("https://example.com/hero.png")
@@ -234,7 +258,7 @@ match client.text_to_model(params).await {
         eprintln!("API error {code}: {message:?} — {suggestion:?}");
     }
     Err(Error::Task { task }) => {
-        eprintln!("Task {} failed: {:?}", task.task_id, task.error_msg);
+        eprintln!("Task {} failed: {:?}", task.task_id, task.error_message);
     }
     Err(Error::Timeout { task_id, timeout_ms }) => {
         eprintln!("Gave up after {timeout_ms}ms — task {task_id}");
@@ -251,16 +275,49 @@ match client.text_to_model(params).await {
 ## Constants
 
 ```rust
-use tripo3d_sdk::{TaskStatus, Animation, RigType, RigSpec, constants::model_version, OutputFormat};
+use tripo3d_sdk::{TaskStatus, Animation, RigType, RigSpec, OutputFormat};
+use tripo3d_sdk::constants::{image_model, model_version};
 
 TaskStatus::Success;
 Animation::Walk.as_str();          // "preset:walk"
 RigType::Biped;                    // serializes as "biped"
 RigSpec::Mixamo;                   // serializes as "mixamo"
 model_version::H3_1;               // "v3.1-20260211"
-model_version::P1;                 // "P1-20260311"
+model_version::P2;                 // "P2-20260801"
+image_model::SEEDREAM_V5;          // "seedream_v5"
+image_model::CHAT_IMAGE_2_5_SUNBURST; // "chat_image_2.5_sunburst"
 OutputFormat::Fbx;                 // serializes as "FBX"
 ```
+
+### 3D generation models
+
+| Constant | Value | Notes |
+| --- | --- | --- |
+| `model_version::H3_1` | `v3.1-20260211` | Latest, best quality (default) |
+| `model_version::H3_0` | `v3.0-20250812` | Stable, advanced features |
+| `model_version::H2_5` | `v2.5-20250123` | Legacy; does not accept `geometry_quality` |
+| `model_version::P1` | `P1-20260311` | Low-poly, clean topology |
+| `model_version::P2` | `P2-20260801` | Next-gen P series, quad output. Preview |
+
+`quad` is accepted only by `model_version::P2` within the P series — sending it with `P1` returns a `400`. P1 also rejects `smart_low_poly`, `generate_parts`, and `geometry_quality`.
+
+### Image generation models
+
+Used by `text_to_image` and `image_to_image`.
+
+| Constant | Value | Notes |
+| --- | --- | --- |
+| `image_model::SEEDREAM_V5` | `seedream_v5` | Strongest editing, style transfer, multi-image fusion |
+| `image_model::BANANA` | `banana` | Fast |
+| `image_model::BANANA_PRO` | `banana_pro` | Higher quality |
+| `image_model::BANANA2` | `banana2` | Latest fast option |
+| `image_model::CHAT_IMAGE_2` | `chat_image_2` | Best quality |
+| `image_model::CHAT_IMAGE_2_5_FLARE` | `chat_image_2.5_flare` | 2.5 speed tier |
+| `image_model::CHAT_IMAGE_2_5_SUNBURST` | `chat_image_2.5_sunburst` | 2.5 fidelity tier |
+
+A few parameters are model-specific: `quality` is accepted only by `chat_image_2` and the 2.5 models (other models reject the request), `background` only by the 2.5 models, and `aspect_ratio` only by the banana models — seedream and chat_image size their output through `size` instead.
+
+`chat_image_1` and `chat_image_1.5` are omitted deliberately: they retire on 2026-10-23 and 2026-12-01 respectively. Pass them as a raw string if you still need them during migration.
 
 ---
 

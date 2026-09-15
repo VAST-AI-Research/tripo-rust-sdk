@@ -4,9 +4,14 @@
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
+use tripo3d_sdk::constants::{
+    export_orientation, image_background, image_format, image_model, image_quality, model_version,
+    view,
+};
+use tripo3d_sdk::models::{FileInput, MultiviewPrompt};
 use tripo3d_sdk::params::{
-    ImageToModelParams, MultiviewToModelParams, RetargetAnimationParams, RigCheckParams,
-    RigModelParams, TextToModelParams,
+    EditMultiviewParams, ImageToImageParams, ImageToModelParams, MultiviewToModelParams,
+    RetargetAnimationParams, RigCheckParams, RigModelParams, TextToImageParams, TextToModelParams,
 };
 use tripo3d_sdk::{ClientOptions, Error, TaskStatus, TripoClient, WaitOptions};
 use wiremock::matchers::{body_json, header, method, path};
@@ -93,13 +98,11 @@ async fn text_to_model_rejects_empty_prompt() {
 }
 
 #[tokio::test]
-async fn image_to_model_accepts_a_url() {
+async fn image_to_model_sends_a_bare_input_string() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/generation/image-to-model"))
-        .and(body_json(
-            json!({ "file": { "url": "https://ex.com/a.png" } }),
-        ))
+        .and(body_json(json!({ "input": "https://ex.com/a.png" })))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "code": 0,
             "data": { "task_id": "task_img" }
@@ -110,6 +113,35 @@ async fn image_to_model_accepts_a_url() {
     let client = test_client(&server).await;
     let id = client
         .image_to_model(ImageToModelParams::new("https://ex.com/a.png"))
+        .await
+        .unwrap();
+    assert_eq!(id, "task_img");
+}
+
+#[tokio::test]
+async fn image_to_model_sends_an_explicit_input_object() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/generation/image-to-model"))
+        .and(body_json(json!({
+            "input": { "url": "https://ex.com/a.png" },
+            "model": model_version::P2,
+            "export_orientation": export_orientation::MINUS_Y,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": { "task_id": "task_img" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let id = client
+        .image_to_model(ImageToModelParams {
+            model: Some(model_version::P2.to_string()),
+            export_orientation: Some(export_orientation::MINUS_Y.to_string()),
+            ..ImageToModelParams::new(FileInput::Url("https://ex.com/a.png".into()))
+        })
         .await
         .unwrap();
     assert_eq!(id, "task_img");
@@ -127,14 +159,215 @@ async fn image_to_model_rejects_missing_file() {
 }
 
 #[tokio::test]
-async fn multiview_to_model_requires_files_or_original_task_id() {
+async fn multiview_to_model_sends_positional_inputs() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/generation/multiview-to-model"))
+        .and(body_json(json!({
+            "inputs": ["front.png", "", "back.png", ""],
+            "model": model_version::H3_1,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": { "task_id": "task_mv" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let id = client
+        .multiview_to_model(MultiviewToModelParams {
+            model: Some(model_version::H3_1.to_string()),
+            ..MultiviewToModelParams::from_views([
+                Some(FileInput::from("front.png")),
+                None,
+                Some(FileInput::from("back.png")),
+                None,
+            ])
+        })
+        .await
+        .unwrap();
+    assert_eq!(id, "task_mv");
+}
+
+#[tokio::test]
+async fn multiview_to_model_reuses_a_task_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/generation/multiview-to-model"))
+        .and(body_json(
+            json!({ "inputs": [{ "task_id": "task_mv_src" }] }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": { "task_id": "task_mv" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let id = client
+        .multiview_to_model(MultiviewToModelParams::from_task_id("task_mv_src"))
+        .await
+        .unwrap();
+    assert_eq!(id, "task_mv");
+}
+
+#[tokio::test]
+async fn multiview_to_model_rejects_invalid_inputs() {
     let server = MockServer::start().await;
     let client = test_client(&server).await;
-    let err = client
-        .multiview_to_model(MultiviewToModelParams::default())
+
+    for params in [
+        MultiviewToModelParams::default(),
+        MultiviewToModelParams::from_views([None, Some(FileInput::from("left.png")), None, None]),
+        MultiviewToModelParams::from_views([Some(FileInput::from("front.png")), None, None, None]),
+    ] {
+        let err = client.multiview_to_model(params).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)));
+    }
+}
+
+#[tokio::test]
+async fn image_to_image_sends_a_model_and_multiple_inputs() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/generation/image-to-image"))
+        .and(body_json(json!({
+            "inputs": ["https://ex.com/a.png", "ftok-b"],
+            "prompt": "use image[1] and image[2]",
+            "model": image_model::SEEDREAM_V5,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": { "task_id": "task_i2i" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let id = client
+        .image_to_image(ImageToImageParams {
+            model: Some(image_model::SEEDREAM_V5.to_string()),
+            ..ImageToImageParams::from_inputs(
+                [
+                    FileInput::from("https://ex.com/a.png"),
+                    FileInput::from("ftok-b"),
+                ],
+                "use image[1] and image[2]",
+            )
+        })
         .await
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidArgument(_)));
+        .unwrap();
+    assert_eq!(id, "task_i2i");
+}
+
+#[tokio::test]
+async fn image_to_image_rejects_invalid_inputs() {
+    let server = MockServer::start().await;
+    let client = test_client(&server).await;
+
+    for params in [
+        ImageToImageParams {
+            prompt: Some("x".into()),
+            ..Default::default()
+        },
+        ImageToImageParams {
+            inputs: Some(vec![FileInput::from("b")]),
+            ..ImageToImageParams::new("a", "x")
+        },
+        ImageToImageParams {
+            input: Some(FileInput::from("a")),
+            ..Default::default()
+        },
+    ] {
+        let err = client.image_to_image(params).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)));
+    }
+}
+
+#[tokio::test]
+async fn text_to_image_sends_the_new_image_parameters() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/generation/text-to-image"))
+        .and(body_json(json!({
+            "prompt": "a glass sneaker",
+            "model": image_model::CHAT_IMAGE_2_5_SUNBURST,
+            "quality": image_quality::MAX,
+            "background": image_background::TRANSPARENT,
+            "output_format": image_format::PNG,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": { "task_id": "task_t2i" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let id = client
+        .text_to_image(TextToImageParams {
+            model: Some(image_model::CHAT_IMAGE_2_5_SUNBURST.to_string()),
+            quality: Some(image_quality::MAX.to_string()),
+            background: Some(image_background::TRANSPARENT.to_string()),
+            output_format: Some(image_format::PNG.to_string()),
+            ..TextToImageParams::new("a glass sneaker")
+        })
+        .await
+        .unwrap();
+    assert_eq!(id, "task_t2i");
+}
+
+#[tokio::test]
+async fn edit_multiview_sends_per_view_prompts() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/generation/edit-multiview"))
+        .and(body_json(json!({
+            "input": "task_mv_src",
+            "prompts": [
+                { "prompt": "make the shirt red", "view": view::FRONT },
+                { "prompt": "add a logo", "view": view::BACK },
+            ],
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": { "task_id": "task_edit" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let id = client
+        .edit_multiview(EditMultiviewParams::new(
+            "task_mv_src",
+            [
+                MultiviewPrompt::new("make the shirt red", view::FRONT),
+                MultiviewPrompt::new("add a logo", view::BACK),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(id, "task_edit");
+}
+
+#[tokio::test]
+async fn edit_multiview_rejects_invalid_prompts() {
+    let server = MockServer::start().await;
+    let client = test_client(&server).await;
+
+    for params in [
+        EditMultiviewParams::new("", [MultiviewPrompt::new("x", view::FRONT)]),
+        EditMultiviewParams::new("task_mv_src", []),
+        EditMultiviewParams::new(
+            "task_mv_src",
+            (0..5).map(|_| MultiviewPrompt::new("x", view::FRONT)),
+        ),
+    ] {
+        let err = client.edit_multiview(params).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)));
+    }
 }
 
 #[tokio::test]

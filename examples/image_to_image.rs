@@ -12,16 +12,18 @@ use std::env;
 use std::path::Path;
 use tokio::fs;
 use tripo3d_sdk::{
-    constants::TaskStatus, models::FileInput, params::ImageToImageParams, ClientOptions,
-    TripoClient, WaitOptions,
+    constants::{image_model, TaskStatus},
+    models::FileInput,
+    params::ImageToImageParams,
+    ClientOptions, TripoClient, WaitOptions,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = env::args().skip(1);
-    let input = args
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Usage: cargo run --example image_to_image -- <local-file|url> [prompt]"))?;
+    let input = args.next().ok_or_else(|| {
+        anyhow::anyhow!("Usage: cargo run --example image_to_image -- <local-file|url> [prompt]")
+    })?;
     let prompt = args.collect::<Vec<_>>().join(" ");
     let prompt = if prompt.is_empty() {
         "turn it into a watercolor painting".to_string()
@@ -32,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let client = TripoClient::new(ClientOptions::default())?;
 
     let file_input: FileInput = if input.starts_with("http://") || input.starts_with("https://") {
-        FileInput::Url(input.clone())
+        FileInput::from(input.as_str())
     } else {
         let bytes = fs::read(&input).await?;
         let filename = Path::new(&input)
@@ -45,15 +47,14 @@ async fn main() -> anyhow::Result<()> {
             .upload_file(bytes, filename, Some(content_type))
             .await?;
         println!("> uploaded, file_token={}", uploaded.file_token);
-        FileInput::FileToken(uploaded.file_token)
+        FileInput::from(uploaded.file_token.as_str())
     };
 
     println!("> prompt: {prompt}");
     let task_id = client
         .image_to_image(ImageToImageParams {
-            file: Some(file_input.into_descriptor()),
-            prompt: Some(prompt),
-            ..Default::default()
+            model: Some(image_model::SEEDREAM_V5.to_string()),
+            ..ImageToImageParams::new(file_input, prompt)
         })
         .await?;
     println!("> submitted, task_id={task_id}");

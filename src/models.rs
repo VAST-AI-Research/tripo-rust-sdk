@@ -33,8 +33,17 @@ pub struct Task {
     pub input: Option<Value>,
     #[serde(default)]
     pub output: Option<TaskOutput>,
+    /// Credits consumed, a decimal with up to two places (e.g. `48.00`).
+    /// Deliberately a float: VIP discounts produce fractional values that
+    /// integer parsing would truncate.
     #[serde(default)]
-    pub create_time: Option<i64>,
+    pub credits_consumed: Option<f64>,
+    /// ISO 8601 creation time.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    /// ISO 8601 completion time; absent until the task is terminal.
+    #[serde(default)]
+    pub completed_at: Option<String>,
     #[serde(default)]
     pub running_left_time: Option<i64>,
     #[serde(default)]
@@ -42,7 +51,7 @@ pub struct Task {
     #[serde(default)]
     pub error_code: Option<i64>,
     #[serde(default)]
-    pub error_msg: Option<String>,
+    pub error_message: Option<String>,
     /// Any additional fields the API returns that aren't modeled above.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -66,6 +75,11 @@ pub struct TaskOutput {
     pub rendered_image: Option<String>,
     #[serde(default)]
     pub rendered_image_url: Option<String>,
+    /// Output of the text-to-image and image-to-image endpoints. The 3D
+    /// generation endpoints also populate it with the reference image they
+    /// synthesised internally.
+    #[serde(default)]
+    pub generated_image_url: Option<String>,
     #[serde(default)]
     pub riggable: Option<bool>,
     #[serde(default)]
@@ -130,6 +144,12 @@ pub(crate) struct TaskCreated {
     pub task_id: String,
 }
 
+/// Reuses the 4-view output of an earlier multiview task.
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiviewTaskRef {
+    pub task_id: String,
+}
+
 /// Bucket/key pair for pre-uploaded assets (STS-style upload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectRef {
@@ -151,22 +171,52 @@ pub struct FileDescriptor {
     pub file_type: Option<String>,
 }
 
-/// Anything that can be coerced into a [`FileDescriptor`]: a URL, a bare
-/// `file_token`, or an explicit descriptor.
-#[derive(Debug, Clone)]
+/// An image or model reference, in any of the shapes the v3 API accepts.
+///
+/// A [`FileInput::Ref`] serialises as a bare JSON string and lets the server
+/// infer what it is — a public URL, a `file_token`, or the `task_id` of an
+/// earlier task whose output should be reused. That inference is what makes
+/// chaining tasks possible, so it is what `From<&str>` produces. Use the
+/// other variants when you want to be explicit.
+#[derive(Debug, Clone, Default)]
 pub enum FileInput {
+    /// A bare reference whose kind the server infers.
+    Ref(String),
     Url(String),
     FileToken(String),
     Descriptor(FileDescriptor),
+    /// An omitted view. Only meaningful in a multiview slot, where it
+    /// serialises as the empty string the API uses to skip a view.
+    #[default]
+    Empty,
+}
+
+impl Serialize for FileInput {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            FileInput::Ref(s) => serializer.serialize_str(s),
+            FileInput::Empty => serializer.serialize_str(""),
+            FileInput::Url(url) => FileDescriptor {
+                url: Some(url.clone()),
+                ..Default::default()
+            }
+            .serialize(serializer),
+            FileInput::FileToken(token) => FileDescriptor {
+                file_token: Some(token.clone()),
+                ..Default::default()
+            }
+            .serialize(serializer),
+            FileInput::Descriptor(d) => d.serialize(serializer),
+        }
+    }
 }
 
 impl From<&str> for FileInput {
     fn from(value: &str) -> Self {
-        if value.starts_with("http://") || value.starts_with("https://") {
-            FileInput::Url(value.to_string())
-        } else {
-            FileInput::FileToken(value.to_string())
-        }
+        FileInput::Ref(value.to_string())
     }
 }
 
@@ -183,6 +233,20 @@ impl From<FileDescriptor> for FileInput {
 }
 
 impl FileInput {
+    /// Reports whether this input carries no reference at all.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            FileInput::Empty => true,
+            FileInput::Ref(s) | FileInput::Url(s) | FileInput::FileToken(s) => s.is_empty(),
+            FileInput::Descriptor(d) => {
+                d.file_token.is_none() && d.url.is_none() && d.object.is_none()
+            }
+        }
+    }
+
+    /// Collapses this input into the explicit object form. A [`FileInput::Ref`]
+    /// is classified by its prefix, which cannot distinguish a `file_token`
+    /// from a `task_id` — prefer serialising the `FileInput` directly.
     pub fn into_descriptor(self) -> FileDescriptor {
         match self {
             FileInput::Url(url) => FileDescriptor {
@@ -193,7 +257,40 @@ impl FileInput {
                 file_token: Some(token),
                 ..Default::default()
             },
+            FileInput::Ref(r) => {
+                if r.starts_with("http://") || r.starts_with("https://") {
+                    FileDescriptor {
+                        url: Some(r),
+                        ..Default::default()
+                    }
+                } else {
+                    FileDescriptor {
+                        file_token: Some(r),
+                        ..Default::default()
+                    }
+                }
+            }
             FileInput::Descriptor(d) => d,
+            FileInput::Empty => FileDescriptor::default(),
+        }
+    }
+}
+
+/// A single per-view edit instruction for `edit_multiview`.
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiviewPrompt {
+    /// The edit instruction, e.g. "change the shirt color to red".
+    pub prompt: String,
+    /// The view to apply the edit to; see the [`view`](crate::constants::view)
+    /// constants.
+    pub view: String,
+}
+
+impl MultiviewPrompt {
+    pub fn new(prompt: impl Into<String>, view: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            view: view.into(),
         }
     }
 }

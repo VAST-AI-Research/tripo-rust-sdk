@@ -29,8 +29,13 @@ mod http;
 
 pub use client::{ClientOptions, DownloadedModel, TripoClient, WaitOptions};
 pub use constants::{
-    model_version, AnimOutFormat, Animation, OutputFormat, RigSpec, RigType, TaskStatus,
+    aspect_ratio, export_orientation, geometry_quality, image_background, image_format,
+    image_model, image_quality, image_template, model_version, orientation, texture_alignment,
+    texture_quality, view, AnimOutFormat, Animation, OutputFormat, RigSpec, RigType, TaskStatus,
     TextureFormat, DEFAULT_BASE_URL,
 };
 pub use error::{Error, Result};
-pub use models::{Balance, FileDescriptor, FileInput, ObjectRef, Task, TaskOutput, UploadedFile};
+pub use models::{
+    Balance, FileDescriptor, FileInput, MultiviewPrompt, MultiviewTaskRef, ObjectRef, Task,
+    TaskOutput, UploadedFile,
+};

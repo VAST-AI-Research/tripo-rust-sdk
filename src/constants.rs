@@ -185,16 +185,151 @@ impl fmt::Display for AnimOutFormat {
     }
 }
 
-/// Available `model` values (product lines) exposed by the v3 API.
-/// This is intentionally a plain string wrapper (not a closed enum) since
-/// Tripo3D regularly ships new model versions.
+/// `model` values accepted by the 3D generation endpoints.
+/// These are intentionally plain strings (not a closed enum) since Tripo3D
+/// regularly ships new model versions.
 pub mod model_version {
     pub const H3_1: &str = "v3.1-20260211";
     pub const H3_0: &str = "v3.0-20250812";
     pub const H2_5: &str = "v2.5-20250123";
-    pub const H2_0: &str = "v2.0-20240919";
     pub const P1: &str = "P1-20260311";
-    pub const TURBO_V1: &str = "Turbo-v1.0-20250506";
+    /// Next-generation P series. The only model that accepts `quad`, and
+    /// unlike P1 it supports face limits up to 50,000 triangles (25,000
+    /// with `quad`). Preview.
+    pub const P2: &str = "P2-20260801";
+}
+
+/// `model` values accepted by `POST /v3/generation/text-to-image` and
+/// `POST /v3/generation/image-to-image`.
+///
+/// `chat_image_1` and `chat_image_1.5` are omitted deliberately — they
+/// retire on 2026-10-23 and 2026-12-01 respectively. Pass them as a raw
+/// string during migration if you still need them.
+pub mod image_model {
+    pub const SEEDREAM_V5: &str = "seedream_v5";
+    pub const BANANA: &str = "banana";
+    pub const BANANA_PRO: &str = "banana_pro";
+    pub const BANANA2: &str = "banana2";
+    pub const CHAT_IMAGE_2: &str = "chat_image_2";
+    pub const CHAT_IMAGE_2_5_FLARE: &str = "chat_image_2.5_flare";
+    pub const CHAT_IMAGE_2_5_SUNBURST: &str = "chat_image_2.5_sunburst";
+}
+
+/// `quality` render tiers for image generation.
+///
+/// Only `chat_image_2` and the 2.5 models accept this parameter; any other
+/// model rejects the request outright. Omitting it is equivalent to [`LOW`]
+/// — note this differs from OpenAI's own `auto` default, which is not
+/// supported here.
+///
+/// [`XHIGH`] and [`MAX`] are exclusive to the 2.5 models. [`HIGH`] and above
+/// cost extra credits and take noticeably longer.
+pub mod image_quality {
+    pub const LOW: &str = "low";
+    pub const MEDIUM: &str = "medium";
+    pub const HIGH: &str = "high";
+    pub const XHIGH: &str = "xhigh";
+    pub const MAX: &str = "max";
+}
+
+/// `background` handling modes, supported only by the 2.5 models. Other
+/// models ignore the field rather than rejecting the request.
+/// [`TRANSPARENT`] requires [`image_format::PNG`].
+pub mod image_background {
+    pub const AUTO: &str = "auto";
+    pub const OPAQUE: &str = "opaque";
+    pub const TRANSPARENT: &str = "transparent";
+}
+
+/// `output_format` of a generated image.
+pub mod image_format {
+    pub const PNG: &str = "png";
+    pub const JPEG: &str = "jpeg";
+}
+
+/// `aspect_ratio` of a generated image. Only the banana models accept it;
+/// seedream and chat_image size their output via `size` instead.
+///
+/// The 1:8, 1:4, 4:1 and 8:1 ratios are exclusive to `banana2`.
+pub mod aspect_ratio {
+    pub const R1X1: &str = "1:1";
+    pub const R2X3: &str = "2:3";
+    pub const R3X2: &str = "3:2";
+    pub const R3X4: &str = "3:4";
+    pub const R4X3: &str = "4:3";
+    pub const R4X5: &str = "4:5";
+    pub const R5X4: &str = "5:4";
+    pub const R9X16: &str = "9:16";
+    pub const R16X9: &str = "16:9";
+    pub const R21X9: &str = "21:9";
+    pub const R1X8: &str = "1:8";
+    pub const R1X4: &str = "1:4";
+    pub const R4X1: &str = "4:1";
+    pub const R8X1: &str = "8:1";
+}
+
+/// `template` presets for image generation. Setting one makes `prompt`
+/// optional.
+///
+/// [`ASSET_EXTRACTION`] is accepted only by text-to-image and
+/// [`ENHANCE_3D`] only by image-to-image; the rest work on both.
+pub mod image_template {
+    pub const ASSET_EXTRACTION: &str = "asset_extraction";
+    pub const CHARACTER_COMPLETION: &str = "character_completion";
+    pub const T_POSE: &str = "t_pose";
+    pub const VARIANTS: &str = "variants";
+    pub const FIGURE: &str = "figure";
+    pub const ENHANCE_3D: &str = "3d_enhance";
+}
+
+/// `export_orientation` (forward axis) of a generated model.
+///
+/// It applies to that generation only. If the model will be fed into
+/// post-processing (texture, rig, retarget, convert), leave this unset and
+/// reorient in the last step via `convert_model` instead — a wrongly
+/// oriented post-processing result still reports success rather than
+/// raising an error.
+pub mod export_orientation {
+    pub const PLUS_X: &str = "+x";
+    pub const MINUS_X: &str = "-x";
+    pub const PLUS_Y: &str = "+y";
+    pub const MINUS_Y: &str = "-y";
+}
+
+/// `texture_quality` levels for 3D generation.
+pub mod texture_quality {
+    pub const STANDARD: &str = "standard";
+    pub const DETAILED: &str = "detailed";
+    pub const EXTREME: &str = "extreme";
+}
+
+/// `geometry_quality` levels for 3D generation. Only effective for model
+/// versions >= [`model_version::H3_0`]; do not send it with
+/// [`model_version::H2_5`].
+pub mod geometry_quality {
+    pub const STANDARD: &str = "standard";
+    pub const DETAILED: &str = "detailed";
+}
+
+/// `texture_alignment` priority for image- and multiview-based generation.
+pub mod texture_alignment {
+    pub const ORIGINAL_IMAGE: &str = "original_image";
+    pub const GEOMETRY: &str = "geometry";
+}
+
+/// `orientation` of a generated model relative to the input image. Only
+/// effective when texturing is enabled.
+pub mod orientation {
+    pub const DEFAULT: &str = "default";
+    pub const ALIGN_IMAGE: &str = "align_image";
+}
+
+/// The four canonical camera angles used by the multiview endpoints.
+pub mod view {
+    pub const FRONT: &str = "front";
+    pub const LEFT: &str = "left";
+    pub const BACK: &str = "back";
+    pub const RIGHT: &str = "right";
 }
 
 /// Model conversion output formats accepted by `POST /v3/models/convert`.
