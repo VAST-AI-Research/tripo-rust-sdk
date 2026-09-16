@@ -312,6 +312,8 @@ OutputFormat::Fbx;                 // 序列化为 "FBX"
 
 P 系列中只有 `model_version::P2` 支持 `quad`，传给 `P1` 会返回 `400`。P1 同样不支持 `smart_low_poly`、`generate_parts` 和 `geometry_quality`。
 
+另外，开启 `quad` 会把输出格式强制为 **FBX** 而非 GLB，所以请从 `model_url` 推导扩展名，不要假定是 `.glb` —— 用 `downloaded.filename(name)` 即可。
+
 ### 生图模型
 
 用于 `text_to_image` 与 `image_to_image`。

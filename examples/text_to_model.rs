@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
 
     match client.download_model(&task).await? {
         Some(downloaded) => {
-            let filename = format!("tripo-{task_id}.glb");
+            let filename = downloaded.filename(&format!("tripo-{task_id}"));
             fs::write(&filename, &downloaded.data).await?;
             println!("> saved {filename} ({} bytes)", downloaded.data.len());
         }

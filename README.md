@@ -299,7 +299,7 @@ OutputFormat::Fbx;                 // serializes as "FBX"
 | `model_version::P1` | `P1-20260311` | Low-poly, clean topology |
 | `model_version::P2` | `P2-20260801` | Next-gen P series, quad output. Preview |
 
-`quad` is accepted only by `model_version::P2` within the P series — sending it with `P1` returns a `400`. P1 also rejects `smart_low_poly`, `generate_parts`, and `geometry_quality`.
+`quad` is accepted only by `model_version::P2` within the P series — sending it with `P1` returns a `400`. P1 also rejects `smart_low_poly`, `generate_parts`, and `geometry_quality`. Enabling `quad` also forces the output format to **FBX** instead of GLB, so derive the file extension from `model_url` rather than assuming `.glb` — use `downloaded.filename(name)` for that.
 
 ### Image generation models
 

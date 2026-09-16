@@ -65,6 +65,33 @@ pub struct DownloadedModel {
     pub data: Vec<u8>,
 }
 
+impl DownloadedModel {
+    /// The lower-case file extension of the downloaded model, without the
+    /// leading dot (e.g. `"glb"`, `"fbx"`), or `None` if the URL carries
+    /// none.
+    ///
+    /// Do not assume GLB: setting `quad` on a generation task forces FBX
+    /// output, and `convert_model` emits whichever format was requested.
+    pub fn extension(&self) -> Option<String> {
+        self.url
+            .split(['?', '#'])
+            .next()?
+            .rsplit('/')
+            .next()?
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.to_lowercase())
+    }
+
+    /// A download-ready `<name>.<ext>` for this model, falling back to
+    /// `glb` when the URL carries no extension.
+    pub fn filename(&self, name: &str) -> String {
+        format!(
+            "{name}.{}",
+            self.extension().unwrap_or_else(|| "glb".into())
+        )
+    }
+}
+
 pub struct TripoClient {
     http: HttpClient,
 }

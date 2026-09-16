@@ -13,7 +13,7 @@ use tripo3d_sdk::params::{
     EditMultiviewParams, ImageToImageParams, ImageToModelParams, MultiviewToModelParams,
     RetargetAnimationParams, RigCheckParams, RigModelParams, TextToImageParams, TextToModelParams,
 };
-use tripo3d_sdk::{ClientOptions, Error, TaskStatus, TripoClient, WaitOptions};
+use tripo3d_sdk::{ClientOptions, DownloadedModel, Error, TaskStatus, TripoClient, WaitOptions};
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -631,4 +631,28 @@ async fn http_500_triggers_retries_then_request_error() {
     let client = test_client(&server).await;
     let err = client.get_balance().await.unwrap_err();
     assert!(matches!(err, Error::Request { .. }));
+}
+
+#[test]
+fn downloaded_model_extension_tracks_the_url() {
+    // quad=true generations return FBX, so the extension cannot be assumed.
+    for (url, want_ext, want_name) in [
+        ("https://cdn/a/model.glb", Some("glb"), "out.glb"),
+        (
+            "https://cdn/a/model.fbx?auth_key=1-abc-0-def",
+            Some("fbx"),
+            "out.fbx",
+        ),
+        ("https://cdn/a/model.USDZ#frag", Some("usdz"), "out.usdz"),
+        ("https://cdn/a/model", None, "out.glb"),
+        ("https://cdn/a.b/model?x=1", None, "out.glb"),
+    ] {
+        let d = DownloadedModel {
+            url: url.to_string(),
+            content_type: None,
+            data: Vec::new(),
+        };
+        assert_eq!(d.extension().as_deref(), want_ext, "extension of {url}");
+        assert_eq!(d.filename("out"), want_name, "filename of {url}");
+    }
 }

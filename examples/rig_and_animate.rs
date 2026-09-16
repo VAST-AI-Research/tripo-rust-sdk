@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(downloaded) = client.download_model(&anim_task).await? {
-        let filename = format!("character-{anim_task_id}.glb");
+        let filename = downloaded.filename(&format!("character-{anim_task_id}"));
         fs::write(&filename, &downloaded.data).await?;
         println!("> saved {filename} ({} bytes)", downloaded.data.len());
     }

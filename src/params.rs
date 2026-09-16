@@ -45,6 +45,9 @@ pub struct TextToModelParams {
     pub face_limit: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_size: Option<bool>,
+    /// Outputs a quad mesh instead of triangles, which forces the output
+    /// format to FBX rather than GLB. Within the P series only
+    /// [`model_version::P2`](crate::constants::model_version::P2) accepts it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quad: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,6 +107,9 @@ pub struct ImageToModelParams {
     pub auto_size: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation: Option<String>,
+    /// Outputs a quad mesh instead of triangles, which forces the output
+    /// format to FBX rather than GLB. Within the P series only
+    /// [`model_version::P2`](crate::constants::model_version::P2) accepts it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quad: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,6 +182,9 @@ pub struct MultiviewToModelParams {
     pub auto_size: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation: Option<String>,
+    /// Outputs a quad mesh instead of triangles, which forces the output
+    /// format to FBX rather than GLB. Within the P series only
+    /// [`model_version::P2`](crate::constants::model_version::P2) accepts it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quad: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
