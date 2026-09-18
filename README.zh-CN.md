@@ -283,6 +283,25 @@ match client.text_to_model(params).await {
 
 ---
 
+### 重试与重复提交
+
+任务创建接口按提交次数计费,因此 SDK 绝不会重放一个服务端可能已经收下的请求。只有在**能证明请求从未被处理**时才重试——连接被拒绝、DNS 解析失败,或服务端明确返回 `429` / `503`。而语义不明的失败(发送途中连接被重置、超时、`500` / `502` / `504`)会让非幂等请求立即失败;幂等的读请求则照常重试。
+
+任务创建失败且状态不明时,错误上会带标记,让你能区分"确定失败"和"状态不确定":
+
+```rust
+match client.image_to_image(params).await {
+    Err(Error::Request { indeterminate: true, .. }) => {
+        // The submission may have gone through. Check list_tasks rather
+        // than resubmitting.
+    }
+    Err(_) => { /* Definitely failed; safe to retry yourself. */ }
+    Ok(task_id) => { /* … */ }
+}
+```
+
+此时应先去任务列表核对,不要盲目重发——盲目重试正是重复扣费的根源。
+
 ## 常量枚举
 
 ```rust

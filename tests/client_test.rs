@@ -656,3 +656,151 @@ fn downloaded_model_extension_tracks_the_url() {
         assert_eq!(d.filename("out"), want_name, "filename of {url}");
     }
 }
+
+// ──────────────────── Retry safety (billing-sensitive) ────────────────────
+//
+// Task-creation endpoints are billed per submission, so a POST must never be
+// replayed once the server may have seen it. These tests pin the exact number
+// of times the request reaches the server.
+
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
+
+fn retry_client(base_url: String) -> TripoClient {
+    TripoClient::new(ClientOptions {
+        api_key: Some("test-key".into()),
+        base_url: Some(base_url),
+        timeout: Some(Duration::from_secs(5)),
+        retries: Some(2),
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+async fn billable_call(client: &TripoClient) -> Result<String, Error> {
+    client
+        .image_to_image(ImageToImageParams {
+            prompt: Some("x".into()),
+            input: Some(FileInput::Url("https://example.com/a.png".into())),
+            ..Default::default()
+        })
+        .await
+}
+
+fn is_indeterminate(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Request {
+            indeterminate: true,
+            ..
+        }
+    )
+}
+
+/// A listener that reads each request and then drops the socket without
+/// replying, which surfaces to the caller as a reset mid-flight.
+async fn dropping_server() -> (String, Arc<AtomicU32>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicU32::new(0));
+    let counter = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let counter = counter.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                // One read is enough to know the request headers arrived.
+                let _ = socket.read(&mut buf).await;
+                counter.fetch_add(1, Ordering::SeqCst);
+                drop(socket);
+            });
+        }
+    });
+    (format!("http://{addr}"), hits)
+}
+
+async fn status_server(status: u16) -> (MockServer, String) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+            "code": 1000, "message": "nope"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+            "code": 1000, "message": "nope"
+        })))
+        .mount(&server)
+        .await;
+    let uri = server.uri();
+    (server, uri)
+}
+
+#[tokio::test]
+async fn billable_post_is_not_replayed_when_connection_drops_mid_flight() {
+    let (base_url, hits) = dropping_server().await;
+    let client = retry_client(base_url);
+
+    let err = billable_call(&client).await.unwrap_err();
+
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "must submit exactly once");
+    assert!(
+        is_indeterminate(&err),
+        "must be flagged indeterminate: {err}"
+    );
+    assert!(
+        err.to_string().contains("billed twice"),
+        "should warn about double billing: {err}"
+    );
+}
+
+#[tokio::test]
+async fn billable_post_is_replayed_when_server_declines_outright() {
+    // 429 means the server refused the work, so a retry cannot double-bill.
+    let (server, uri) = status_server(429).await;
+    let client = retry_client(uri);
+
+    let _ = billable_call(&client).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3, "want 3 attempts (retries: 2)");
+}
+
+#[tokio::test]
+async fn billable_post_is_not_replayed_on_ambiguous_statuses() {
+    for status in [500u16, 502, 504] {
+        let (server, uri) = status_server(status).await;
+        let client = retry_client(uri);
+
+        let err = billable_call(&client).await.unwrap_err();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "HTTP {status}: must submit exactly once");
+        assert!(
+            is_indeterminate(&err),
+            "HTTP {status}: must be flagged indeterminate"
+        );
+    }
+}
+
+#[tokio::test]
+async fn idempotent_get_is_still_retried() {
+    let (base_url, hits) = dropping_server().await;
+    let client = retry_client(base_url);
+    let err = client.get_task("t1").await.unwrap_err();
+    assert_eq!(hits.load(Ordering::SeqCst), 3, "reads stay retryable");
+    assert!(!is_indeterminate(&err), "reads are never indeterminate");
+
+    for status in [500u16, 429] {
+        let (server, uri) = status_server(status).await;
+        let client = retry_client(uri);
+        let _ = client.get_task("t1").await;
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 3, "HTTP {status}: reads stay retryable");
+    }
+}

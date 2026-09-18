@@ -21,6 +21,11 @@ pub enum Error {
         body: Option<String>,
         #[source]
         source: Option<reqwest::Error>,
+        /// True when the request may have been processed by the server
+        /// despite the failure. Resubmitting a billed task-creation request
+        /// in this state risks being charged twice; reconcile against
+        /// [`crate::TripoClient::list_tasks`] first.
+        indeterminate: bool,
     },
 
     /// A well-formed `{ code, message, suggestion }` error envelope with a

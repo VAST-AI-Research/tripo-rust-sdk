@@ -2,8 +2,11 @@
 //!
 //! Responsibilities:
 //!   - Attach `Authorization: Bearer …` header.
-//!   - Retry idempotent requests on transient errors with exponential
-//!     back-off (honoring `Retry-After` when present).
+//!   - Retry on transient errors with exponential back-off (honoring
+//!     `Retry-After` when present), but only when the server cannot have
+//!     processed the request: non-idempotent calls (every task-creation
+//!     POST) are never replayed once they may have landed, since those are
+//!     billed per submission.
 //!   - Parse the standard `{ code, data, message, suggestion }` envelope and
 //!     surface [`crate::Error::Api`] / [`crate::Error::Request`] as needed.
 
@@ -14,7 +17,33 @@ use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
-const DEFAULT_RETRY_STATUSES: &[u16] = &[408, 425, 429, 500, 502, 503, 504];
+/// What a failure tells us about whether the server acted on the request.
+///
+/// Task-creation endpoints are billed per submission, so replaying a request
+/// that may already have been processed can charge the caller twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetrySafety {
+    /// Non-transient failure: never retry.
+    Fatal,
+    /// The request may or may not have been processed. Only idempotent
+    /// methods may be retried.
+    Unknown,
+    /// The server provably never acted on the request, so a retry is safe
+    /// regardless of method.
+    Clean,
+}
+
+/// Statuses where the server answered and told us it declined to do the work.
+const CLEAN_RETRY_STATUSES: &[u16] = &[429, 503];
+
+/// Statuses where the server answered but whether it processed the request is
+/// unknowable — a 504 in particular is often emitted by a proxy after the
+/// origin already accepted the work.
+const UNKNOWN_RETRY_STATUSES: &[u16] = &[408, 425, 500, 502, 504];
+
+const INDETERMINATE_HINT: &str =
+    "the server may already have accepted this request, so it was not retried \
+     automatically; check your task list before resubmitting to avoid being billed twice";
 
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
@@ -48,6 +77,7 @@ impl HttpClient {
                 status: None,
                 body: None,
                 source: Some(e),
+                indeterminate: false,
             })?;
         Ok(Self { inner, config })
     }
@@ -72,13 +102,21 @@ impl HttpClient {
         path: &str,
         opts: RequestOptions<'_>,
     ) -> Result<T> {
+        let idempotent = is_idempotent_method(&method);
         let response = self.execute(method, path, opts).await?;
         let status = response.status().as_u16();
+        // The server already answered, so it has done the work; only the
+        // read-back failed.
         let bytes = response.bytes().await.map_err(|e| Error::Request {
-            message: format!("failed to read response body: {e}"),
+            message: if idempotent {
+                format!("failed to read response body: {e}")
+            } else {
+                format!("failed to read response body: {e}; {INDETERMINATE_HINT}")
+            },
             status: Some(status),
             body: None,
             source: Some(e),
+            indeterminate: !idempotent,
         })?;
         parse_envelope(&bytes, Some(status))
     }
@@ -98,18 +136,29 @@ impl HttpClient {
             .timeout(self.config.timeout)
             .send()
             .await
-            .map_err(|e| Error::Request {
-                message: format!("network error: {e}"),
-                status: None,
-                body: None,
-                source: Some(e),
+            .map_err(|e| {
+                // Upload is a POST and is never retried here, but the caller
+                // still needs to know whether the upload may have landed.
+                let indeterminate = classify_transport_err(&e) == RetrySafety::Unknown;
+                Error::Request {
+                    message: if indeterminate {
+                        format!("network error: {e}; {INDETERMINATE_HINT}")
+                    } else {
+                        format!("network error: {e}")
+                    },
+                    status: None,
+                    body: None,
+                    source: Some(e),
+                    indeterminate,
+                }
             })?;
         let status = response.status().as_u16();
         let bytes = response.bytes().await.map_err(|e| Error::Request {
-            message: format!("failed to read response body: {e}"),
+            message: format!("failed to read response body: {e}; {INDETERMINATE_HINT}"),
             status: Some(status),
             body: None,
             source: Some(e),
+            indeterminate: true,
         })?;
         parse_envelope(&bytes, Some(status))
     }
@@ -128,6 +177,7 @@ impl HttpClient {
                 status: None,
                 body: None,
                 source: Some(e),
+                indeterminate: false,
             })?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -137,6 +187,7 @@ impl HttpClient {
                 status: Some(status),
                 body,
                 source: None,
+                indeterminate: false,
             });
         }
         let content_type = response
@@ -149,6 +200,7 @@ impl HttpClient {
             status: None,
             body: None,
             source: Some(e),
+            indeterminate: false,
         })?;
         Ok((bytes.to_vec(), content_type))
     }
@@ -161,6 +213,7 @@ impl HttpClient {
     ) -> Result<reqwest::Response> {
         let url = self.url(path);
         let total_attempts = opts.retries.unwrap_or(self.config.retries) + 1;
+        let idempotent = is_idempotent_method(&method);
 
         let mut attempt = 0u32;
         loop {
@@ -181,7 +234,8 @@ impl HttpClient {
                     if status.is_success() {
                         return Ok(response);
                     }
-                    if is_retryable_status(status) && attempt < total_attempts {
+                    let safety = classify_status(status);
+                    if can_retry(safety, idempotent) && attempt < total_attempts {
                         let retry_after = response
                             .headers()
                             .get(reqwest::header::RETRY_AFTER)
@@ -190,21 +244,40 @@ impl HttpClient {
                         tokio::time::sleep(backoff(attempt, retry_after)).await;
                         continue;
                     }
+                    if safety == RetrySafety::Unknown && !idempotent {
+                        let code = status.as_u16();
+                        let body = response.text().await.ok();
+                        return Err(Error::Request {
+                            message: format!("HTTP {code}; {INDETERMINATE_HINT}"),
+                            status: Some(code),
+                            body,
+                            source: None,
+                            indeterminate: true,
+                        });
+                    }
                     // Not retryable (or attempts exhausted): let the caller's
                     // envelope parser decide whether this is Error::Api or
                     // Error::Request based on the body shape.
                     return Ok(response);
                 }
                 Err(e) => {
-                    if attempt < total_attempts && (e.is_timeout() || e.is_connect()) {
+                    let safety = classify_transport_err(&e);
+                    if can_retry(safety, idempotent) && attempt < total_attempts {
                         tokio::time::sleep(backoff(attempt, None)).await;
                         continue;
                     }
+                    let indeterminate = safety == RetrySafety::Unknown && !idempotent;
+                    let message = if indeterminate {
+                        format!("network error: {e}; {INDETERMINATE_HINT}")
+                    } else {
+                        format!("network error: {e}")
+                    };
                     return Err(Error::Request {
-                        message: format!("network error: {e}"),
+                        message,
                         status: None,
                         body: None,
                         source: Some(e),
+                        indeterminate,
                     });
                 }
             }
@@ -212,8 +285,43 @@ impl HttpClient {
     }
 }
 
-fn is_retryable_status(status: StatusCode) -> bool {
-    DEFAULT_RETRY_STATUSES.contains(&status.as_u16())
+fn is_idempotent_method(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+fn can_retry(safety: RetrySafety, idempotent: bool) -> bool {
+    match safety {
+        RetrySafety::Clean => true,
+        RetrySafety::Unknown => idempotent,
+        RetrySafety::Fatal => false,
+    }
+}
+
+fn classify_status(status: StatusCode) -> RetrySafety {
+    let code = status.as_u16();
+    if CLEAN_RETRY_STATUSES.contains(&code) {
+        RetrySafety::Clean
+    } else if UNKNOWN_RETRY_STATUSES.contains(&code) {
+        RetrySafety::Unknown
+    } else {
+        RetrySafety::Fatal
+    }
+}
+
+/// Decide how much a transport error tells us about whether the request
+/// reached the server's handler.
+fn classify_transport_err(e: &reqwest::Error) -> RetrySafety {
+    // `is_connect` covers DNS failures and refused/unreachable peers, none of
+    // which ever delivered the request.
+    if e.is_connect() {
+        return RetrySafety::Clean;
+    }
+    // Timeouts and resets can land after the server has already read and
+    // acted on the request.
+    if e.is_timeout() || e.is_request() || e.is_body() {
+        return RetrySafety::Unknown;
+    }
+    RetrySafety::Fatal
 }
 
 fn backoff(attempt: u32, retry_after_secs: Option<f64>) -> Duration {
@@ -238,6 +346,7 @@ fn parse_envelope<T: DeserializeOwned>(bytes: &[u8], status: Option<u16>) -> Res
             status,
             body: None,
             source: None,
+            indeterminate: false,
         });
     }
     let envelope: Envelope<T> = serde_json::from_slice(bytes).map_err(|e| {
@@ -247,6 +356,7 @@ fn parse_envelope<T: DeserializeOwned>(bytes: &[u8], status: Option<u16>) -> Res
             status,
             body: Some(raw),
             source: None,
+            indeterminate: false,
         }
     })?;
     if envelope.code != 0 {
@@ -262,5 +372,6 @@ fn parse_envelope<T: DeserializeOwned>(bytes: &[u8], status: Option<u16>) -> Res
         status,
         body: None,
         source: None,
+        indeterminate: false,
     })
 }
