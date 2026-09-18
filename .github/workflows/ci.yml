@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: test (stable)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Plain `cargo test` on purpose: `--all-targets` silently drops the
+      # doctests, and clippy above already compiles the examples.
+      - name: Test
+        run: cargo test
+
+  msrv:
+    runs-on: ubuntu-latest
+    name: build (MSRV 1.86)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.86
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Library only: `rust-version` is a promise to consumers, and the test
+      # suite's dev-dependencies (wiremock) need a newer toolchain than the
+      # library itself does.
+      - name: Build
+        run: cargo build
+
+      - name: Check the declared MSRV matches this job
+        run: |
+          declared="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version')"
+          if [ "$declared" != "1.86" ]; then
+            echo "Cargo.toml rust-version is $declared but this job verifies 1.86" >&2
+            exit 1
+          fi
