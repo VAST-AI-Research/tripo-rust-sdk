@@ -22,6 +22,13 @@ clippy, and the test suite before publishing.
 The `User-Agent` derives from `CARGO_PKG_VERSION`, so it tracks `Cargo.toml`
 automatically.
 
+`Cargo.lock` is committed and every CI and publish step runs `--locked`, so
+what ships is what CI verified. Refreshing dependencies is therefore a
+deliberate act (`cargo update`), and it can raise the effective MSRV: the
+`icu_*` crates that `reqwest` pulls in bump theirs often. After an update,
+re-check `rust-version` against the `msrv` job in `.github/workflows/ci.yml`
+— CI fails if the two disagree.
+
 ## One-time setup (already done)
 
 On [crates.io](https://crates.io/crates/tripo3d-sdk/settings) → **Trusted
